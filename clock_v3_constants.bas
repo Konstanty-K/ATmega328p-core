@@ -1,7 +1,7 @@
 '(
 ##############################################################################
 ZEGAR Z PRZERWANIEM + UPTIME COUNTER + TIME_RELAY SCHEDULER
-Clock_v3 - FINAL VERSION
+Clock_v3 - FINAL PRODUCTION VERSION (Prescaler 256)
 ##############################################################################
 ')
 
@@ -30,19 +30,19 @@ Const Day_hours = 24
 Const Max_relays = 5
 Const Relay_disabled = 2147483647
 
-' === DECLARE SUBROUTINES ===
-Declare Sub Register_time_relay(Byval Id As Byte , Byval Interval_seconds As Long)
-Declare Sub Check_time_relays()
-Declare Sub Execute_relay_callback(Byval Relay_id As Byte)
-
 ' === TIMER1 ===
 Config Timer1 = Timer , Prescale = Timer1_prescale
 On Timer1 Timer1_Isr Nosave
 Enable Timer1
 Enable Interrupts
 
-' === TIMER0 ===
-Config Timer0 = Timer , Prescale = 64
+' === TIMER0 - PRESCALER 256 ===
+Config Timer0 = Timer , Prescale = 256
+
+' === DECLARE SUBROUTINES ===
+Declare Sub Register_time_relay(Byval Id As Byte , Byval Interval_seconds As Long)
+Declare Sub Check_time_relays()
+Declare Sub Execute_relay_callback(Byval Relay_id As Byte)
 
 ' === ZMIENNE CZASU (UPTIME) ===
 Dim Day As Long
@@ -70,11 +70,10 @@ Dim Input_State As Byte
 Dim Output_State As Byte
 
 ' === STRINGI DLA DISPLAY ===
-Dim Day_str As String * 10
 Dim Hour_str As String * 2
 Dim Minute_str As String * 2
 Dim Second_str As String * 2
-Dim Isr_str As String * 5
+Dim Day_str As String * 10
 
 ' === INICJALIZACJA ===
 Cls
@@ -109,7 +108,7 @@ Call Register_time_relay(1 , 3600)
 ' Relay 2: Co 1 dniu (86400 sekund)
 Call Register_time_relay(2 , 86400)
 
-' === GŁÓWNA PĘTLA ===
+' === GĹĂ“WNA PÄTLA ===
 Do
   Timer0 = 0
   Start Timer0
@@ -118,7 +117,7 @@ Do
   Gosub Execute_Logic
   Gosub Update_Outputs
 
-  ' === SPRAWDŹ TIME_RELAY ===
+  ' === SPRAWDĹą TIME_RELAY ===
   Call Check_time_relays()
 
   If Sync_Flag = 1 Then
@@ -130,7 +129,7 @@ Do
 
   Stop Timer0
   Loop_Time_Ms = Timer0
-  Loop_Time_Ms = Loop_Time_Ms * 64
+  Loop_Time_Ms = Loop_Time_Ms * 256        ' Prescaler 256
   Loop_Time_Ms = Loop_Time_Ms / 1000
 
   If Loop_Time_Ms < Loop_time Then
@@ -146,7 +145,7 @@ Timer1_Isr:
   Incr Isr_Counter
   Incr Isr_Counter_Total
   Incr Second
-  Incr Total_seconds                ' ‹ Licznik dla time_relay
+  Incr Total_seconds
 
   If Second >= Minute_seconds Then
     Second = 0
@@ -176,7 +175,7 @@ Return
 Sub Register_time_relay(Byval Id As Byte , Byval Interval_seconds As Long)
   ' Zarejestruj nowy relay
   ' Id: 0-4 (Max_relays)
-  ' Interval_seconds: co ile sekund uruchomić?
+  ' Interval_seconds: co ile sekund uruchomiÄ‡?
 
   If Id >= Max_relays Then
     Return
@@ -188,7 +187,7 @@ Sub Register_time_relay(Byval Id As Byte , Byval Interval_seconds As Long)
 End Sub
 
 Sub Check_time_relays()
-  ' Sprawdź czy jakiś relay powinien się uruchomić
+  ' SprawdĹş czy jakiĹ› relay powinien siÄ™ uruchomiÄ‡
   Dim Seconds_since_last_trigger As Long
 
   For Relay_index = 0 To Max_relays - 1
@@ -204,7 +203,6 @@ Sub Check_time_relays()
     End If
   Next Relay_index
 End Sub
-
 
 Sub Execute_relay_callback(Byval Relay_id As Byte)
   ' Callback dla konkretnego relay'a
@@ -267,11 +265,11 @@ Sync_With_Sim800l:
 Return
 
 Display_Clock:
-  Day_str = Str(Day)
+  ' Konwertuj na stringi dla Format()
   Hour_str = Str(Hour)
   Minute_str = Str(Minute)
   Second_str = Str(Second)
-  Isr_str = Str(Isr_Counter)
+  Day_str = Str(Day)
 
   ' Linia 1: UPTIME - Dni:Godziny:Minuty:Sekundy
   Locate 1 , 1
@@ -279,7 +277,7 @@ Display_Clock:
 
   ' Linia 2: ISR counter + Loop time
   Locate 2 , 1
-  Lcd "ISR: " ; Isr_str ; " Loop: " ; Loop_Time_Ms ; "ms"
+  Lcd "ISR: " ; Isr_Counter ; " Loop: " ; Loop_Time_Ms ; "ms"
 
   ' Linia 3: Sync status
   Locate 3 , 1
