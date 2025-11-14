@@ -1,6 +1,6 @@
 '(
 ##############################################################################
-ZEGAR Z PRZERWANIEM - CZYSTY KOD
+ZEGAR Z PRZERWANIEM + LICZNIK UPTIME (bez resetu)
 ##############################################################################
 ')
 
@@ -17,12 +17,13 @@ Config Serialin = Buffered , Size = 160
 Config 1Wire = PortD.4
 
 ' === CONSTANTS ===
-Const Loop_time = 200               ' Target loop time in ms (PLC-like cycle)
-Const Timer1_prescale = 1024        ' Timer1 prescaler
-Const Timer1_target_sec = 977       ' Ticks for ~1 second at 1MHz, prescale 1024
-Const Sync_minutes = 6              ' Synchronize every 6 minutes
-Const Hour_seconds = 3600           ' Seconds in 1 hour
-Const Minute_seconds = 60           ' Seconds in 1 minute
+Const Loop_time = 200
+Const Timer1_prescale = 1024
+Const Timer1_target_sec = 977
+Const Sync_minutes = 6
+Const Hour_seconds = 3600
+Const Minute_seconds = 60
+Const Day_hours = 24
 
 ' === TIMER1 ===
 Config Timer1 = Timer , Prescale = Timer1_prescale
@@ -33,21 +34,29 @@ Enable Interrupts
 ' === TIMER0 ===
 Config Timer0 = Timer , Prescale = 64
 
-' === ZMIENNE ===
-Dim Second As Byte
-Dim Minute As Byte
+' === ZMIENNE CZASU ===
+Dim Day As Long                     ' ‹ LONG: licznik uptime (nigdy reset!)
 Dim Hour As Byte
+Dim Minute As Byte
+Dim Second As Byte
 Dim Loop_Time_Ms As Word
 Dim Idle_Time As Word
 Dim Sync_Flag As Bit
-Dim Hour_Done As Bit
 Dim Remainder As Byte
 Dim Isr_Counter As Word
+Dim Isr_Counter_Total As Long
 
 ' === Utility Variables ===
 Dim Temp_Value As Single
 Dim Input_State As Byte
 Dim Output_State As Byte
+
+' === STRINGI DLA DISPLAY ===
+Dim Day_str As String * 10         ' ‹ Większy string dla dużych liczb!
+Dim Hour_str As String * 2
+Dim Minute_str As String * 2
+Dim Second_str As String * 2
+Dim Isr_str As String * 5
 
 ' === INICJALIZACJA ===
 Cls
@@ -55,15 +64,16 @@ Lcd "Inicjalizacja..."
 Wait 1
 Timer1 = 65536 - Timer1_target_sec
 Start Timer1
-Second = 0
-Minute = 0
+Day = 0
 Hour = 0
+Minute = 0
+Second = 0
 Sync_Flag = 0
-Hour_Done = 0
 Loop_Time_Ms = 0
 Isr_Counter = 0
+Isr_Counter_Total = 0
 
-' === G��WNA P�TLA ===
+' === GŁÓWNA PĘTLA ===
 Do
   Timer0 = 0
   Start Timer0
@@ -75,15 +85,6 @@ Do
   If Sync_Flag = 1 Then
     Sync_Flag = 0
     Gosub Sync_With_Sim800l
-  End If
-
-  If Hour_Done = 1 Then
-    Hour_Done = 0
-    Locate 4 , 1
-    Lcd "*** GODZINA! ***"
-    Wait 2
-    Locate 4 , 1
-    Lcd "                "
   End If
 
   Gosub Display_Clock
@@ -104,6 +105,7 @@ Loop
 Timer1_Isr:
   Timer1 = 65536 - Timer1_target_sec
   Incr Isr_Counter
+  Incr Isr_Counter_Total
   Incr Second
 
   If Second >= Minute_seconds Then
@@ -113,8 +115,11 @@ Timer1_Isr:
     If Minute >= Minute_seconds Then
       Minute = 0
       Incr Hour
-      If Hour >= 24 Then Hour = 0
-      Hour_Done = 1
+
+      If Hour >= Day_hours Then
+        Hour = 0
+        Incr Day                    ' ‹ ZAWSZE inkrementuj (NIGDY reset!)
+      End If
     End If
   End If
 
@@ -154,19 +159,15 @@ Sync_With_Sim800l:
 Return
 
 Display_Clock:
-  Dim Hour_str As String * 2
-  Dim Minute_str As String * 2
-  Dim Second_str As String * 2
-  Dim Isr_str As String * 5
-
+  Day_str = Str(Day)
   Hour_str = Str(Hour)
   Minute_str = Str(Minute)
   Second_str = Str(Second)
   Isr_str = Str(Isr_Counter)
 
-  ' Linia 1: Zegar HH:MM:SS (centered)
-  Locate 1 , 6
-  Lcd Format(Hour_str , "00") ; ":" ; Format(Minute_str , "00") ; ":" ; Format(Second_str , "00")
+  ' Linia 1: UPTIME - Dni:Godziny:Minuty:Sekundy
+  Locate 1 , 1
+  Lcd "UP: " ; Day_str ; "d " ; Format(Hour_str , "00") ; ":" ; Format(Minute_str , "00") ; ":" ; Format(Second_str , "00")
 
   ' Linia 2: ISR counter + Loop time
   Locate 2 , 1
