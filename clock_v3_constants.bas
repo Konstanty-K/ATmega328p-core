@@ -1,7 +1,7 @@
 '(
 ##############################################################################
 ZEGAR Z PRZERWANIEM + UPTIME COUNTER + TIME_RELAY SCHEDULER
-Clock_v3 - FINAL PRODUCTION VERSION (Prescaler 256)
+Clock_v3 - FINAL PRODUCTION VERSION (Non-blocking Relays, Concurrent Triggers)
 ##############################################################################
 ')
 
@@ -29,6 +29,7 @@ Const Day_hours = 24
 ' === TIME_RELAY CONSTANTS ===
 Const Max_relays = 5
 Const Relay_disabled = 2147483647
+Const Relay_display_duration = 2         ' Jak dĹ‚ugo wyĹ›wietlaÄ‡ (sekundy)
 
 ' === TIMER1 ===
 Config Timer1 = Timer , Prescale = Timer1_prescale
@@ -43,6 +44,7 @@ Config Timer0 = Timer , Prescale = 256
 Declare Sub Register_time_relay(Byval Id As Byte , Byval Interval_seconds As Long)
 Declare Sub Check_time_relays()
 Declare Sub Execute_relay_callback(Byval Relay_id As Byte)
+Declare Sub Check_relay_callbacks_timeout()
 
 ' === ZMIENNE CZASU (UPTIME) ===
 Dim Day As Long
@@ -64,6 +66,10 @@ Dim Relay_enabled(Max_relays) As Byte
 Dim Relay_index As Byte
 Dim Relay_id As Byte
 
+' === NON-BLOCKING CALLBACK STATE ===
+Dim Relay_callback_active(Max_relays) As Byte    ' Flaga czy callback pokazywany
+Dim Relay_callback_end_time(Max_relays) As Long  ' Kiedy siÄ™ skoĹ„czy
+
 ' === Utility Variables ===
 Dim Temp_Value As Single
 Dim Input_State As Byte
@@ -73,7 +79,7 @@ Dim Output_State As Byte
 Dim Hour_str As String * 2
 Dim Minute_str As String * 2
 Dim Second_str As String * 2
-Dim Day_str As String * 10
+Dim Day_str As String * 4
 
 ' === INICJALIZACJA ===
 Cls
@@ -96,17 +102,22 @@ For Relay_index = 0 To Max_relays - 1
   Relay_interval_seconds(Relay_index) = Relay_disabled
   Relay_last_trigger(Relay_index) = 0
   Relay_enabled(Relay_index) = 0
+  Relay_callback_active(Relay_index) = 0
+  Relay_callback_end_time(Relay_index) = 0
 Next Relay_index
 
 ' === REJESTRACJA TIME_RELAYS ===
-' Relay 0: Co 10 sekund (test)
-Call Register_time_relay(0 , 10)
+' Relay 1: Co 10 sekund
+Call Register_time_relay(1 , 10)
 
-' Relay 1: Co 1 godzinie (3600 sekund)
-Call Register_time_relay(1 , 3600)
+' Relay 2: Co 30 sekund
+Call Register_time_relay(2 , 30)
 
-' Relay 2: Co 1 dniu (86400 sekund)
-Call Register_time_relay(2 , 86400)
+' Relay 3: Co 70 sekund
+Call Register_time_relay(3 , 70)
+
+' Relay 4: Co 1 godzinie (3600 sekund)
+Call Register_time_relay(4 , 3600)
 
 ' === GĹĂ“WNA PÄTLA ===
 Do
@@ -117,8 +128,11 @@ Do
   Gosub Execute_Logic
   Gosub Update_Outputs
 
-  ' === SPRAWDĹą TIME_RELAY ===
+  ' === SPRAWDĹą TIME_RELAY (mogÄ… triggowaÄ‡ jednoczeĹ›nie!) ===
   Call Check_time_relays()
+
+  ' === SPRAWDĹą CALLBACK TIMEOUTY (non-blocking) ===
+  Call Check_relay_callbacks_timeout()
 
   If Sync_Flag = 1 Then
     Sync_Flag = 0
@@ -132,6 +146,7 @@ Do
   Loop_Time_Ms = Loop_Time_Ms * 256        ' Prescaler 256
   Loop_Time_Ms = Loop_Time_Ms / 1000
 
+  ' === BEZ IDLE MODE (szybsza pÄ™tla) ===
   If Loop_Time_Ms < Loop_time Then
     Idle_Time = Loop_time - Loop_Time_Ms
     Config Powermode = Idle
@@ -174,10 +189,10 @@ Return
 
 Sub Register_time_relay(Byval Id As Byte , Byval Interval_seconds As Long)
   ' Zarejestruj nowy relay
-  ' Id: 0-4 (Max_relays)
+  ' Id: 1-5 (numeracja od 1)
   ' Interval_seconds: co ile sekund uruchomiÄ‡?
 
-  If Id >= Max_relays Then
+  If Id < 1 Or Id > Max_relays Then
     Return
   End If
 
@@ -188,9 +203,10 @@ End Sub
 
 Sub Check_time_relays()
   ' SprawdĹş czy jakiĹ› relay powinien siÄ™ uruchomiÄ‡
-  Dim Seconds_since_last_trigger As Long
+  ' MOGÄ„ TRIGGOWAÄ† JEDNOCZEĹšNIE!
+  Local Seconds_since_last_trigger As Long
 
-  For Relay_index = 0 To Max_relays - 1
+  For Relay_index = 1 To Max_relays - 1
     If Relay_enabled(Relay_index) = 1 Then
       If Relay_interval_seconds(Relay_index) <> Relay_disabled Then
         Seconds_since_last_trigger = Total_seconds - Relay_last_trigger(Relay_index)
@@ -205,35 +221,53 @@ Sub Check_time_relays()
 End Sub
 
 Sub Execute_relay_callback(Byval Relay_id As Byte)
-  ' Callback dla konkretnego relay'a
+  ' Callback dla konkretnego relay'a - NON-BLOCKING!
+  ' Zamiast Wait - ustawiamy timer
 
   Select Case Relay_id
-    Case 0
-      ' Relay 0: Co 10 sekund (test)
-      Locate 4 , 1
-      Lcd "RELAY 0: 10s trigger"
-      Wait 1
-      ' TODO: Call External_function_10s()
-
     Case 1
-      ' Relay 1: Co 1 godzinie
+      ' Relay 1: Co 10 sekund
       Locate 4 , 1
-      Lcd "RELAY 1: 1h trigger "
-      Wait 1
-      ' TODO: Call External_function_1h()
+      Lcd ">>> RELAY 1: 10s  <<<"
 
     Case 2
-      ' Relay 2: Co 1 dniu
+      ' Relay 2: Co 30 sekund
       Locate 4 , 1
-      Lcd "RELAY 2: 1d trigger "
-      Wait 1
-      ' TODO: Call External_function_1d()
+      Lcd ">>> RELAY 2: 30s  <<<"
+
+    Case 3
+      ' Relay 3: Co 70 sekund
+      Locate 4 , 1
+      Lcd ">>> RELAY 3: 70s  <<<"
+
+    Case 4
+      ' Relay 4: Co 1 godzinie
+      Locate 4 , 1
+      Lcd ">>> RELAY 4: 1h   <<<"
 
     Case Else
   End Select
 
-  Locate 4 , 1
-  Lcd "                    "
+  ' === USTAW TIMER (zamiast Wait) ===
+  Relay_callback_active(Relay_id) = 1
+  Relay_callback_end_time(Relay_id) = Total_seconds + Relay_display_duration
+End Sub
+
+Sub Check_relay_callbacks_timeout()
+  ' SprawdĹş czy jakiĹ› callback powinien siÄ™ zakoĹ„czyÄ‡ (timeout)
+  ' To pozwala na non-blocking, concurrent relay'e
+  Local I As Byte
+
+  For I = 1 To Max_relays - 1
+    If Relay_callback_active(I) = 1 Then
+      If Total_seconds >= Relay_callback_end_time(I) Then
+        ' Callback skoĹ„czyĹ‚ siÄ™ â€” wyczyĹ›Ä‡ LCD
+        Locate 4 , 1
+        Lcd "                    "
+        Relay_callback_active(I) = 0
+      End If
+    End If
+  Next I
 End Sub
 
 ' === SUBROUTINES ===
@@ -258,10 +292,10 @@ Return
 
 Sync_With_Sim800l:
   Locate 4 , 1
-  Lcd "SYNC: SIM800L..."
+  Lcd "SYNC: SIM800L...    "
   Wait 3
   Locate 4 , 1
-  Lcd "                "
+  Lcd "                    "
 Return
 
 Display_Clock:
@@ -284,6 +318,6 @@ Display_Clock:
   If Sync_Flag = 1 Then
     Lcd "Sync: ACTIVE        "
   Else
-    Lcd "Sync: idle " ; Idle_Time ; "ms     "
+    Lcd "Sync: idle " ; Idle_Time ; "ms "
   End If
 Return
