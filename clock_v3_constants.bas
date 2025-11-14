@@ -1,6 +1,7 @@
 '(
 ##############################################################################
-ZEGAR Z PRZERWANIEM + LICZNIK UPTIME (bez resetu)
+ZEGAR Z PRZERWANIEM + UPTIME COUNTER + TIME_RELAY SCHEDULER
+Clock_v3 - FINAL VERSION
 ##############################################################################
 ')
 
@@ -25,6 +26,15 @@ Const Hour_seconds = 3600
 Const Minute_seconds = 60
 Const Day_hours = 24
 
+' === TIME_RELAY CONSTANTS ===
+Const Max_relays = 5
+Const Relay_disabled = 2147483647
+
+' === DECLARE SUBROUTINES ===
+Declare Sub Register_time_relay(Byval Id As Byte , Byval Interval_seconds As Long)
+Declare Sub Check_time_relays()
+Declare Sub Execute_relay_callback(Byval Relay_id As Byte)
+
 ' === TIMER1 ===
 Config Timer1 = Timer , Prescale = Timer1_prescale
 On Timer1 Timer1_Isr Nosave
@@ -34,8 +44,8 @@ Enable Interrupts
 ' === TIMER0 ===
 Config Timer0 = Timer , Prescale = 64
 
-' === ZMIENNE CZASU ===
-Dim Day As Long                     ' ‹ LONG: licznik uptime (nigdy reset!)
+' === ZMIENNE CZASU (UPTIME) ===
+Dim Day As Long
 Dim Hour As Byte
 Dim Minute As Byte
 Dim Second As Byte
@@ -46,13 +56,21 @@ Dim Remainder As Byte
 Dim Isr_Counter As Word
 Dim Isr_Counter_Total As Long
 
+' === TIME_RELAY STATE ===
+Dim Total_seconds As Long
+Dim Relay_interval_seconds(Max_relays) As Long
+Dim Relay_last_trigger(Max_relays) As Long
+Dim Relay_enabled(Max_relays) As Byte
+Dim Relay_index As Byte
+Dim Relay_id As Byte
+
 ' === Utility Variables ===
 Dim Temp_Value As Single
 Dim Input_State As Byte
 Dim Output_State As Byte
 
 ' === STRINGI DLA DISPLAY ===
-Dim Day_str As String * 10         ' ‹ Większy string dla dużych liczb!
+Dim Day_str As String * 10
 Dim Hour_str As String * 2
 Dim Minute_str As String * 2
 Dim Second_str As String * 2
@@ -72,6 +90,24 @@ Sync_Flag = 0
 Loop_Time_Ms = 0
 Isr_Counter = 0
 Isr_Counter_Total = 0
+Total_seconds = 0
+
+' === INITIALIZE RELAYS ===
+For Relay_index = 0 To Max_relays - 1
+  Relay_interval_seconds(Relay_index) = Relay_disabled
+  Relay_last_trigger(Relay_index) = 0
+  Relay_enabled(Relay_index) = 0
+Next Relay_index
+
+' === REJESTRACJA TIME_RELAYS ===
+' Relay 0: Co 10 sekund (test)
+Call Register_time_relay(0 , 10)
+
+' Relay 1: Co 1 godzinie (3600 sekund)
+Call Register_time_relay(1 , 3600)
+
+' Relay 2: Co 1 dniu (86400 sekund)
+Call Register_time_relay(2 , 86400)
 
 ' === GŁÓWNA PĘTLA ===
 Do
@@ -81,6 +117,9 @@ Do
   Gosub Check_Inputs
   Gosub Execute_Logic
   Gosub Update_Outputs
+
+  ' === SPRAWDŹ TIME_RELAY ===
+  Call Check_time_relays()
 
   If Sync_Flag = 1 Then
     Sync_Flag = 0
@@ -107,6 +146,7 @@ Timer1_Isr:
   Incr Isr_Counter
   Incr Isr_Counter_Total
   Incr Second
+  Incr Total_seconds                ' ‹ Licznik dla time_relay
 
   If Second >= Minute_seconds Then
     Second = 0
@@ -118,17 +158,85 @@ Timer1_Isr:
 
       If Hour >= Day_hours Then
         Hour = 0
-        Incr Day                    ' ‹ ZAWSZE inkrementuj (NIGDY reset!)
+        Incr Day
       End If
     End If
   End If
 
-  ' === SYNCHRONIZACJA CO 6 MINUT ===
   Remainder = Minute Mod Sync_minutes
   If Remainder = 0 And Second = 0 Then
     Sync_Flag = 1
   End If
 Return
+
+' ============================================================
+' === TIME_RELAY FUNCTIONS ===
+' ============================================================
+
+Sub Register_time_relay(Byval Id As Byte , Byval Interval_seconds As Long)
+  ' Zarejestruj nowy relay
+  ' Id: 0-4 (Max_relays)
+  ' Interval_seconds: co ile sekund uruchomić?
+
+  If Id >= Max_relays Then
+    Return
+  End If
+
+  Relay_interval_seconds(Id) = Interval_seconds
+  Relay_last_trigger(Id) = 0
+  Relay_enabled(Id) = 1
+End Sub
+
+Sub Check_time_relays()
+  ' Sprawdź czy jakiś relay powinien się uruchomić
+  Dim Seconds_since_last_trigger As Long
+
+  For Relay_index = 0 To Max_relays - 1
+    If Relay_enabled(Relay_index) = 1 Then
+      If Relay_interval_seconds(Relay_index) <> Relay_disabled Then
+        Seconds_since_last_trigger = Total_seconds - Relay_last_trigger(Relay_index)
+
+        If Seconds_since_last_trigger >= Relay_interval_seconds(Relay_index) Then
+          Relay_last_trigger(Relay_index) = Total_seconds
+          Call Execute_relay_callback(Relay_index)
+        End If
+      End If
+    End If
+  Next Relay_index
+End Sub
+
+
+Sub Execute_relay_callback(Byval Relay_id As Byte)
+  ' Callback dla konkretnego relay'a
+
+  Select Case Relay_id
+    Case 0
+      ' Relay 0: Co 10 sekund (test)
+      Locate 4 , 1
+      Lcd "RELAY 0: 10s trigger"
+      Wait 1
+      ' TODO: Call External_function_10s()
+
+    Case 1
+      ' Relay 1: Co 1 godzinie
+      Locate 4 , 1
+      Lcd "RELAY 1: 1h trigger "
+      Wait 1
+      ' TODO: Call External_function_1h()
+
+    Case 2
+      ' Relay 2: Co 1 dniu
+      Locate 4 , 1
+      Lcd "RELAY 2: 1d trigger "
+      Wait 1
+      ' TODO: Call External_function_1d()
+
+    Case Else
+  End Select
+
+  Locate 4 , 1
+  Lcd "                    "
+End Sub
 
 ' === SUBROUTINES ===
 Check_Inputs:
